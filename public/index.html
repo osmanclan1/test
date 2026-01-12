@@ -116,6 +116,11 @@
             errorDiv.textContent = error === 'auth_failed' ? 'Authentication failed. Please try again.' : 'An error occurred.';
             errorDiv.classList.add('show');
         }
+
+        // Clear localStorage token on home page (in case of logout)
+        if (!urlParams.get('token')) {
+            localStorage.removeItem('token');
+        }
     </script>
 </body>
 </html>

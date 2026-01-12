@@ -123,13 +123,41 @@
     </div>
 
     <script>
+        // Extract token from URL if present and store in localStorage (backup)
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenFromUrl = urlParams.get('token');
+        if (tokenFromUrl) {
+            localStorage.setItem('token', tokenFromUrl);
+            // Clean up URL
+            window.history.replaceState({}, document.title, '/profile');
+        }
+
         // Fetch user data
-        fetch('/api/user')
+        fetch('/api/user', {
+            credentials: 'include' // Include cookies
+        })
+            .then(response => {
+                if (!response.ok) {
+                    // If cookie doesn't work, try Authorization header
+                    const token = localStorage.getItem('token');
+                    if (token) {
+                        return fetch('/api/user', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            },
+                            credentials: 'include'
+                        });
+                    }
+                    throw new Error('Not authenticated');
+                }
+                return response;
+            })
             .then(response => response.json())
             .then(data => {
                 const profileContent = document.getElementById('profileContent');
                 
                 if (!data.authenticated) {
+                    localStorage.removeItem('token');
                     window.location.href = '/';
                     return;
                 }

@@ -1,41 +1,34 @@
 require('dotenv').config();
 const express = require('express');
-const session = require('express-session');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Construct callback URL
 const isProduction = process.env.NODE_ENV === 'production';
-// Use explicit callback URL from env, or construct it properly
 const callbackURL = process.env.GOOGLE_CALLBACK_URL || 
   (isProduction 
     ? `https://test-9v73.onrender.com/auth/google/callback`
     : `http://localhost:${PORT}/auth/google/callback`);
 
-// Session configuration
-const sessionSecret = process.env.SESSION_SECRET || (isProduction ? null : 'dev-secret-key-change-in-production');
-if (isProduction && !sessionSecret) {
-  console.error('ERROR: SESSION_SECRET must be set in production!');
+// JWT Secret
+const jwtSecret = process.env.JWT_SECRET || process.env.SESSION_SECRET || (isProduction ? null : 'dev-jwt-secret-change-in-production');
+if (isProduction && !jwtSecret) {
+  console.error('ERROR: JWT_SECRET or SESSION_SECRET must be set in production!');
   process.exit(1);
 }
 
-app.use(session({
-  secret: sessionSecret,
-  resave: false,
-  saveUninitialized: false,
-  cookie: { 
-    secure: isProduction, // Use secure cookies in production (HTTPS)
-    httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
-}));
+// Middleware
+app.use(cookieParser());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Initialize Passport
+// Initialize Passport (without sessions)
 app.use(passport.initialize());
-app.use(passport.session());
 
 // Passport Google OAuth Strategy
 passport.use(new GoogleStrategy({
@@ -44,78 +37,84 @@ passport.use(new GoogleStrategy({
   callbackURL: callbackURL
 },
 function(accessToken, refreshToken, profile, done) {
-  // In a real app, you would save the user to your database here
+  // Return the profile
   return done(null, profile);
 }));
 
-// Serialize user for the session
-passport.serializeUser((user, done) => {
-  done(null, user);
-});
+// JWT Middleware to verify token
+function authenticateToken(req, res, next) {
+  // Try to get token from cookie first, then Authorization header
+  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ authenticated: false, error: 'No token provided' });
+  }
 
-// Deserialize user from the session
-passport.deserializeUser((user, done) => {
-  done(null, user);
-});
+  jwt.verify(token, jwtSecret, (err, user) => {
+    if (err) {
+      return res.status(403).json({ authenticated: false, error: 'Invalid or expired token' });
+    }
+    req.user = user;
+    next();
+  });
+}
 
 // Serve static files (HTML, CSS, JS)
 app.use(express.static('public'));
 
 // Routes
 app.get('/', (req, res) => {
-  // Debug: log if user is authenticated
-  console.log('Home page - User authenticated:', req.isAuthenticated());
   res.sendFile(__dirname + '/public/index.html');
 });
 
 // Google OAuth routes
 app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
+  passport.authenticate('google', { scope: ['profile', 'email'], session: false })
 );
 
 app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/?error=auth_failed' }),
+  passport.authenticate('google', { failureRedirect: '/?error=auth_failed', session: false }),
   function(req, res) {
-    // Successful authentication, redirect to profile
-    console.log('Authentication successful for user:', req.user?.displayName);
-    res.redirect('/profile');
+    // Create JWT token with user info
+    const userPayload = {
+      id: req.user.id,
+      displayName: req.user.displayName,
+      emails: req.user.emails,
+      photos: req.user.photos
+    };
+
+    const token = jwt.sign(userPayload, jwtSecret, { expiresIn: '7d' });
+
+    // Set token as httpOnly cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: isProduction, // HTTPS only in production
+      sameSite: isProduction ? 'none' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+
+    // Redirect to profile with token in URL for localStorage (will be handled by frontend)
+    res.redirect(`/profile?token=${token}`);
   }
 );
 
-// Profile page (protected route)
+// Profile page - serve HTML (token verification happens on API call)
 app.get('/profile', (req, res) => {
-  if (req.isAuthenticated()) {
-    res.sendFile(__dirname + '/public/profile.html');
-  } else {
-    res.redirect('/');
-  }
+  res.sendFile(__dirname + '/public/profile.html');
 });
 
 // Get user data (API endpoint)
-app.get('/api/user', (req, res) => {
-  if (req.isAuthenticated()) {
-    res.json({
-      authenticated: true,
-      user: {
-        id: req.user.id,
-        displayName: req.user.displayName,
-        emails: req.user.emails,
-        photos: req.user.photos
-      }
-    });
-  } else {
-    res.json({ authenticated: false });
-  }
+app.get('/api/user', authenticateToken, (req, res) => {
+  res.json({
+    authenticated: true,
+    user: req.user
+  });
 });
 
 // Logout route
 app.get('/logout', (req, res) => {
-  req.logout((err) => {
-    if (err) {
-      return res.redirect('/?error=logout_failed');
-    }
-    res.redirect('/');
-  });
+  res.clearCookie('token');
+  res.redirect('/');
 });
 
 app.listen(PORT, () => {
@@ -124,6 +123,7 @@ app.listen(PORT, () => {
   console.log('\nMake sure your .env file has:');
   console.log('- GOOGLE_CLIENT_ID');
   console.log('- GOOGLE_CLIENT_SECRET');
+  console.log('- JWT_SECRET (or SESSION_SECRET)');
   console.log('\n⚠️  IMPORTANT: Make sure this callback URL is authorized in Google Cloud Console:');
   console.log(`   ${callbackURL}`);
 });
