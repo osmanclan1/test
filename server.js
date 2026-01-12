@@ -60,6 +60,8 @@ app.use(express.static('public'));
 
 // Routes
 app.get('/', (req, res) => {
+  // Debug: log if user is authenticated
+  console.log('Home page - User authenticated:', req.isAuthenticated());
   res.sendFile(__dirname + '/public/index.html');
 });
 
@@ -71,7 +73,8 @@ app.get('/auth/google',
 app.get('/auth/google/callback',
   passport.authenticate('google', { failureRedirect: '/?error=auth_failed' }),
   function(req, res) {
-    // Successful authentication, redirect to home
+    // Successful authentication, redirect to profile
+    console.log('Authentication successful for user:', req.user?.displayName);
     res.redirect('/profile');
   }
 );
