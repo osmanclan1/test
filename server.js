@@ -9,8 +9,11 @@ const PORT = process.env.PORT || 3000;
 
 // Construct callback URL
 const isProduction = process.env.NODE_ENV === 'production';
-const baseURL = process.env.BASE_URL || (isProduction ? '' : `http://localhost:${PORT}`);
-const callbackURL = process.env.GOOGLE_CALLBACK_URL || `${baseURL}/auth/google/callback`;
+// Use explicit callback URL from env, or construct it properly
+const callbackURL = process.env.GOOGLE_CALLBACK_URL || 
+  (isProduction 
+    ? `https://test-9v73.onrender.com/auth/google/callback`
+    : `http://localhost:${PORT}/auth/google/callback`);
 
 // Session configuration
 const sessionSecret = process.env.SESSION_SECRET || (isProduction ? null : 'dev-secret-key-change-in-production');
